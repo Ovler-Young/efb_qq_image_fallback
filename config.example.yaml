@@ -1,0 +1,47 @@
+# efb-qq-image-fallback-middleware
+#
+# Copy to ~/.ehforwarderbot/profiles/<profile>/qqimg.fallback/config.yaml
+# and edit.
+
+# Base URL of the Caddy read endpoint. The middleware fetches
+# {server_base_url}/{hash[:2]}/{hash[2:4]}/{hash}
+server_base_url: "https://img.example.com/img"
+
+# Retry schedule as offsets (seconds) from first-seen time.
+# Defaults (5 min, 1 h, 6 h, 1 d, 3 d, 7 d):
+retry_schedule_seconds:
+  - 3600
+  - 21600
+  - 86400
+  - 259200
+  - 604800
+
+# How often the background worker wakes up to check for due entries.
+poll_interval_seconds: 30
+
+# Try the fallback server synchronously when the failure message arrives.
+# If it hits, the master sees the real image immediately — no placeholder,
+# no edit later. Recommended true.
+sync_attempt_on_arrival: true
+sync_timeout_seconds: 8.0
+
+# Timeout for background-worker fetches.
+worker_timeout_seconds: 15.0
+
+# Reject fetched images larger than this (bytes). 0 disables the limit.
+max_bytes: 52428800   # 50 MiB
+
+# Extra HTTP headers for fallback requests (e.g. a simple shared token).
+request_headers: {}
+# request_headers:
+#   Authorization: "Bearer ..."
+
+# Limit processing to these slave module IDs. Empty = any slave.
+# The QQ slave using is most likely "milkice.qq".
+slave_module_ids: []
+# slave_module_ids:
+#   - milkice.qq
+
+# Optional — usually leave empty. Set only if you have multiple master
+# instances and want to pin edits to one.
+master_module_id: ""

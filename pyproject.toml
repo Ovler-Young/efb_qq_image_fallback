@@ -1,0 +1,21 @@
+[project]
+name = "efb-qq-image-fallback-middleware"
+version = "0.1.0"
+description = "Recover QQ images that failed to download, via a hash-addressed fallback server."
+requires-python = ">=3.9"
+dependencies = [
+    "ehforwarderbot>=2.0.0",
+    "httpx>=0.24",
+    "PyYAML>=6.0",
+    "python-magic>=0.4",
+]
+
+[project.entry-points."ehforwarderbot.middleware"]
+"qqimg.fallback" = "efb_qq_image_fallback:QQImageFallbackMiddleware"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["efb_qq_image_fallback*"]
