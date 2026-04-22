@@ -47,7 +47,7 @@ class QQImageFallbackMiddleware(Middleware):
     def __init__(self, instance_id: Optional[InstanceID] = None):
         super().__init__(instance_id)
 
-        cfg_path = get_config_path(self.middleware_id) / "config.yaml"
+        cfg_path = get_config_path(self.middleware_id)
         self.cfg = Config.load(cfg_path)
 
         db_path = get_data_path(self.middleware_id) / "queue.sqlite"
