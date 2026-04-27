@@ -1,6 +1,6 @@
 """Solid-color placeholder PNG, stdlib only.
 
-A small grey 200x200 PNG shown while the real image is being fetched
+A small grey 30x200 PNG shown while the real image is being fetched
 via the fallback server or while we wait for it to appear there.
 """
 from __future__ import annotations
@@ -35,7 +35,7 @@ def _encode_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
 def placeholder_bytes() -> bytes:
     global _CACHE
     if _CACHE is None:
-        _CACHE = _encode_png(200, 200, (220, 220, 220))
+        _CACHE = _encode_png(30, 200, (220, 220, 220))
     return _CACHE
 
 
