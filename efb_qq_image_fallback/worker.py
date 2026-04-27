@@ -36,6 +36,7 @@ class RetryWorker(threading.Thread):
         self.queue = queue
         self.edit_callback = edit_callback
         self._stop_event = threading.Event()
+        self._refresh_lock = threading.Lock()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -60,10 +61,38 @@ class RetryWorker(threading.Thread):
             time.sleep(min(1.0, left))
 
     def _tick(self) -> None:
-        rows = self.queue.due(limit=100)
+        if not self._refresh_lock.acquire(blocking=False):
+            log.debug("worker: refresh already running; skipping scheduled tick")
+            return
+        try:
+            rows = self.queue.due(limit=100)
+            if not rows:
+                return
+            log.debug("worker: %d due entries", len(rows))
+            self._process_rows(rows, reschedule_misses=True)
+        finally:
+            self._refresh_lock.release()
+
+    def refresh_all_pending(self) -> int:
+        """Immediately try every pending row, ignoring next_try_at."""
+        if not self._refresh_lock.acquire(blocking=False):
+            log.info("manual refresh skipped because another refresh is running")
+            return 0
+        try:
+            rows = self.queue.all_pending()
+            if not rows:
+                return 0
+            log.info("manual refresh: %d pending entries", len(rows))
+            self._process_rows(rows, reschedule_misses=False)
+            return len(rows)
+        finally:
+            self._refresh_lock.release()
+
+    def _process_rows(
+        self, rows: list[PendingRow], reschedule_misses: bool
+    ) -> None:
         if not rows:
             return
-        log.debug("worker: %d due entries", len(rows))
 
         # Group by hash so we only fetch each hash once per tick.
         by_hash: dict[str, list[PendingRow]] = {}
@@ -81,7 +110,8 @@ class RetryWorker(threading.Thread):
                 headers=self.cfg.request_headers,
             )
             if file is None:
-                self._reschedule_all(group)
+                if reschedule_misses:
+                    self._reschedule_all(group)
                 continue
 
             # Success: the same bytes go out to every row in the group.

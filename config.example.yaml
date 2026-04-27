@@ -45,3 +45,14 @@ slave_module_ids: []
 # Optional — usually leave empty. Set only if you have multiple master
 # instances and want to pin edits to one.
 master_module_id: ""
+
+# Optional local HTTP endpoint for your uploader. After uploading new
+# images, call GET or POST /refresh to make the middleware immediately
+# try every pending DB row instead of waiting for the next scheduled retry.
+refresh_api_enabled: false
+refresh_api_host: "127.0.0.1"
+refresh_api_port: 8765
+
+# Empty = no token check. If set, pass it as ?token=..., X-Refresh-Token,
+# or Authorization: Bearer ...
+refresh_api_token: ""

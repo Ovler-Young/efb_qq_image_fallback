@@ -9,11 +9,12 @@ Config: ~/.ehforwarderbot/profiles/<profile>/qqimg.fallback/config.yaml
 """
 from __future__ import annotations
 
-import asyncio
+import json
 import logging
 import threading
-from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 from ehforwarderbot import Message, MsgType, Status, coordinator
 from ehforwarderbot.middleware import Middleware
@@ -23,7 +24,7 @@ from ehforwarderbot.utils import get_config_path, get_data_path
 from .config import Config
 from .db import PendingRow, Queue
 from .fetch import build_url, fetch_sync
-from .hash_extract import extract_hash_from_text, extract_hash_from_url
+from .hash_extract import extract_hash_from_text
 from .placeholder import placeholder_file
 from .worker import RetryWorker
 
@@ -56,6 +57,10 @@ class QQImageFallbackMiddleware(Middleware):
         self.worker: Optional[RetryWorker] = None
         self._started = False
         self._start_lock = threading.Lock()
+        self._refresh_server: Optional[ThreadingHTTPServer] = None
+        self._refresh_server_thread: Optional[threading.Thread] = None
+        self._manual_refresh_thread: Optional[threading.Thread] = None
+        self._manual_refresh_lock = threading.Lock()
 
         if self.cfg.enabled():
             log.info(
@@ -63,6 +68,7 @@ class QQImageFallbackMiddleware(Middleware):
                 self.middleware_id, __version__,
                 self.cfg.server_base_url, self.queue.count(),
             )
+            self._start_refresh_api()
         else:
             log.warning(
                 "%s loaded but disabled (server_base_url is empty). "
@@ -125,10 +131,122 @@ class QQImageFallbackMiddleware(Middleware):
         """Optional EFB hook. Not abstract on Middleware, but if the
         framework invokes it we honour it.
         """
+        self._stop_refresh_api()
         if self.worker is not None:
             self.worker.stop()
             self.worker.join(timeout=5)
+        if self._manual_refresh_thread is not None:
+            self._manual_refresh_thread.join(timeout=5)
         self.queue.close()
+
+    # --- local refresh API ---------------------------------------------
+
+    def _start_refresh_api(self) -> None:
+        if not self.cfg.refresh_api_enabled:
+            return
+
+        middleware = self
+
+        class RefreshHandler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self._handle_refresh()
+
+            def do_POST(self) -> None:
+                self._handle_refresh()
+
+            def log_message(self, fmt: str, *args) -> None:
+                log.debug("refresh api: " + fmt, *args)
+
+            def _handle_refresh(self) -> None:
+                parsed = urlparse(self.path)
+                if parsed.path != "/refresh":
+                    self._write_json(404, {"ok": False, "error": "not_found"})
+                    return
+                if not middleware._refresh_api_authorized(parsed.query, self.headers):
+                    self._write_json(403, {"ok": False, "error": "forbidden"})
+                    return
+
+                accepted = middleware._trigger_manual_refresh()
+                status = "accepted" if accepted else "already_running"
+                self._write_json(202, {"ok": True, "status": status})
+
+            def _write_json(self, status: int, body: dict) -> None:
+                data = json.dumps(body).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        try:
+            self._refresh_server = ThreadingHTTPServer(
+                (self.cfg.refresh_api_host, self.cfg.refresh_api_port),
+                RefreshHandler,
+            )
+        except OSError:
+            log.exception(
+                "failed to start refresh API on %s:%s",
+                self.cfg.refresh_api_host, self.cfg.refresh_api_port,
+            )
+            return
+
+        self._refresh_server_thread = threading.Thread(
+            target=self._refresh_server.serve_forever,
+            name="qqimg-fallback-refresh-api",
+            daemon=True,
+        )
+        self._refresh_server_thread.start()
+        log.info(
+            "refresh API listening on http://%s:%s/refresh",
+            self.cfg.refresh_api_host,
+            self.cfg.refresh_api_port,
+        )
+
+    def _stop_refresh_api(self) -> None:
+        if self._refresh_server is None:
+            return
+        self._refresh_server.shutdown()
+        self._refresh_server.server_close()
+        if self._refresh_server_thread is not None:
+            self._refresh_server_thread.join(timeout=5)
+        self._refresh_server = None
+        self._refresh_server_thread = None
+
+    def _refresh_api_authorized(self, query: str, headers) -> bool:
+        token = self.cfg.refresh_api_token
+        if not token:
+            return True
+        query_token = parse_qs(query).get("token", [""])[0]
+        header_token = headers.get("X-Refresh-Token", "")
+        auth_header = headers.get("Authorization", "")
+        bearer = f"Bearer {token}"
+        return token in (query_token, header_token) or auth_header == bearer
+
+    def _trigger_manual_refresh(self) -> bool:
+        with self._manual_refresh_lock:
+            if (
+                self._manual_refresh_thread is not None
+                and self._manual_refresh_thread.is_alive()
+            ):
+                return False
+            if not self._started:
+                self._lazy_start()
+
+            self._manual_refresh_thread = threading.Thread(
+                target=self._run_manual_refresh,
+                name="qqimg-fallback-manual-refresh",
+                daemon=True,
+            )
+            self._manual_refresh_thread.start()
+            return True
+
+    def _run_manual_refresh(self) -> None:
+        if self.worker is None:
+            return
+        try:
+            self.worker.refresh_all_pending()
+        except Exception:
+            log.exception("manual refresh failed")
 
     # --- rewrite path ---------------------------------------------------
 

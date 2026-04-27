@@ -105,6 +105,18 @@ class Queue:
             ).fetchall()
         return [PendingRow(*r) for r in rows]
 
+    def all_pending(self) -> list[PendingRow]:
+        with self._lock:
+            rows = self._con.execute(
+                """
+                SELECT id, hash, msg_uid, chat_module_id, chat_uid,
+                       original_url, first_seen, attempts, next_try_at
+                FROM pending
+                ORDER BY next_try_at ASC
+                """
+            ).fetchall()
+        return [PendingRow(*r) for r in rows]
+
     def reschedule(self, row_id: int, attempts: int, next_try_at: float) -> None:
         with self._lock:
             self._con.execute(

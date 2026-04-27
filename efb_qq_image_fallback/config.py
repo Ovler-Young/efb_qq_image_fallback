@@ -60,6 +60,13 @@ class Config:
     # If empty, the middleware uses coordinator.master at runtime.
     master_module_id: str = ""
 
+    # Optional local endpoint for uploaders to trigger an immediate
+    # refresh of all pending rows after new files arrive on the server.
+    refresh_api_enabled: bool = False
+    refresh_api_host: str = "127.0.0.1"
+    refresh_api_port: int = 8765
+    refresh_api_token: str = ""
+
     @classmethod
     def load(cls, path: Path) -> "Config":
         if not path.exists():
@@ -76,6 +83,8 @@ class Config:
             "server_base_url", "retry_schedule_seconds", "poll_interval_seconds",
             "sync_attempt_on_arrival", "sync_timeout_seconds", "worker_timeout_seconds",
             "max_bytes", "request_headers", "slave_module_ids", "master_module_id",
+            "refresh_api_enabled", "refresh_api_host", "refresh_api_port",
+            "refresh_api_token",
         ):
             if k in data:
                 kwargs[k] = data[k]

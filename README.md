@@ -22,6 +22,8 @@ you populate from PC's NTQQ image cache.
    `Message` with `edit=True, edit_media=True` via
    `coordinator.send_message`, which tells the master to replace the
    placeholder with the real image (e.g. Telegram's `editMessageMedia`).
+   If the optional local refresh API is enabled, your uploader can also
+   trigger an immediate full refresh after uploading new files.
 6. After the last scheduled attempt, the entry is dropped.
 
 ## Dependencies
@@ -64,6 +66,26 @@ See `config.example.yaml`. The minimum required setting is
 The retry schedule is a plain list of offsets in seconds from the time
 the failure was first enqueued. To disable background retries entirely
 (only attempt the synchronous fetch on arrival), set it to `[]`.
+
+### Local refresh API
+
+Set `refresh_api_enabled: true` to listen on
+`http://127.0.0.1:8765/refresh` by default. After your uploader finishes
+uploading images to the fallback server, call either:
+
+```bash
+curl "http://127.0.0.1:8765/refresh"
+curl -X POST "http://127.0.0.1:8765/refresh"
+```
+
+The endpoint returns immediately with `accepted` or `already_running`.
+The refresh itself runs in the background and tries every row currently
+in the SQLite pending queue, grouped by hash so each hash is fetched at
+most once in that refresh pass. Scheduled retries still remain as the
+fallback path.
+
+If `refresh_api_token` is set, pass it as `?token=...`,
+`X-Refresh-Token`, or `Authorization: Bearer ...`.
 
 ## Runtime data
 
