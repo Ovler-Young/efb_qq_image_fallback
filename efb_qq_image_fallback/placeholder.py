@@ -35,7 +35,7 @@ def _encode_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
 def placeholder_bytes() -> bytes:
     global _CACHE
     if _CACHE is None:
-        _CACHE = _encode_png(30, 200, (220, 220, 220))
+        _CACHE = _encode_png(200, 30, (220, 220, 220))
     return _CACHE
 
 
