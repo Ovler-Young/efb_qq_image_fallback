@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from typing import Callable, Optional
 
 from .config import Config
@@ -16,6 +17,9 @@ from .db import PendingRow, Queue
 from .fetch import build_url, fetch_sync
 
 log = logging.getLogger(__name__)
+
+EDIT_RATE_LIMIT = 5
+EDIT_RATE_WINDOW_SECONDS = 60.0
 
 
 EditCallback = Callable[[PendingRow, "object"], bool]
@@ -37,6 +41,7 @@ class RetryWorker(threading.Thread):
         self.edit_callback = edit_callback
         self._stop_event = threading.Event()
         self._refresh_lock = threading.Lock()
+        self._edit_times_by_chat: dict[str, deque[float]] = {}
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -129,7 +134,10 @@ class RetryWorker(threading.Thread):
             for r in group:
                 if self._stop_event.is_set():
                     break
-                import io, tempfile
+                self._wait_for_chat_edit_slot(r)
+                if self._stop_event.is_set():
+                    break
+                import tempfile
                 tmp = tempfile.NamedTemporaryFile(
                     prefix="qqimg-fb-", delete=False
                 )
@@ -168,3 +176,22 @@ class RetryWorker(threading.Thread):
             return
         next_at = time.time() + delay
         self.queue.reschedule(r.id, new_attempts, next_at)
+
+    def _wait_for_chat_edit_slot(self, row: PendingRow) -> None:
+        chat_key = f"{row.chat_module_id}:{row.chat_uid}"
+        while not self._stop_event.is_set():
+            now = time.monotonic()
+            times = self._edit_times_by_chat.setdefault(chat_key, deque())
+            while times and now - times[0] >= EDIT_RATE_WINDOW_SECONDS:
+                times.popleft()
+
+            if len(times) < EDIT_RATE_LIMIT:
+                times.append(now)
+                return
+
+            wait_seconds = EDIT_RATE_WINDOW_SECONDS - (now - times[0])
+            log.info(
+                "rate limiting edits for chat=%s; waiting %.1fs",
+                row.chat_uid, wait_seconds,
+            )
+            self._stop_event.wait(wait_seconds)
