@@ -22,6 +22,11 @@ CREATE TABLE IF NOT EXISTS pending (
     msg_uid         TEXT NOT NULL,
     chat_module_id  TEXT NOT NULL,
     chat_uid        TEXT NOT NULL,
+    message_text    TEXT NOT NULL DEFAULT '',
+    author_uid      TEXT,
+    author_name     TEXT,
+    author_alias    TEXT,
+    author_kind     TEXT NOT NULL DEFAULT 'member',
     original_url    TEXT,
     first_seen      REAL NOT NULL,
     attempts        INTEGER NOT NULL DEFAULT 0,
@@ -40,6 +45,11 @@ class PendingRow:
     msg_uid: str
     chat_module_id: str
     chat_uid: str
+    message_text: str
+    author_uid: Optional[str]
+    author_name: Optional[str]
+    author_alias: Optional[str]
+    author_kind: str
     original_url: Optional[str]
     first_seen: float
     attempts: int
@@ -53,7 +63,30 @@ class Queue:
         self._lock = threading.Lock()
         self._con = sqlite3.connect(str(path), check_same_thread=False)
         self._con.executescript(SCHEMA)
+        self._ensure_columns()
         self._con.commit()
+
+    def _ensure_columns(self) -> None:
+        columns = {
+            row[1]
+            for row in self._con.execute("PRAGMA table_info(pending)").fetchall()
+        }
+        migrations = (
+            (
+                "message_text",
+                "ALTER TABLE pending ADD COLUMN message_text TEXT NOT NULL DEFAULT ''",
+            ),
+            ("author_uid", "ALTER TABLE pending ADD COLUMN author_uid TEXT"),
+            ("author_name", "ALTER TABLE pending ADD COLUMN author_name TEXT"),
+            ("author_alias", "ALTER TABLE pending ADD COLUMN author_alias TEXT"),
+            (
+                "author_kind",
+                "ALTER TABLE pending ADD COLUMN author_kind TEXT NOT NULL DEFAULT 'member'",
+            ),
+        )
+        for name, sql in migrations:
+            if name not in columns:
+                self._con.execute(sql)
 
     def close(self) -> None:
         with self._lock:
@@ -65,6 +98,11 @@ class Queue:
         msg_uid: str,
         chat_module_id: str,
         chat_uid: str,
+        message_text: str,
+        author_uid: Optional[str],
+        author_name: Optional[str],
+        author_alias: Optional[str],
+        author_kind: str,
         original_url: Optional[str],
         first_try_at: float,
     ) -> bool:
@@ -78,11 +116,13 @@ class Queue:
                     """
                     INSERT INTO pending
                         (hash, msg_uid, chat_module_id, chat_uid,
-                         original_url, first_seen, attempts, next_try_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+                         message_text, author_uid, author_name, author_alias,
+                         author_kind, original_url, first_seen, attempts, next_try_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                     """,
                     (hash_, msg_uid, chat_module_id, chat_uid,
-                     original_url, now, first_try_at),
+                     message_text, author_uid, author_name, author_alias,
+                     author_kind, original_url, now, first_try_at),
                 )
                 self._con.commit()
                 return True
@@ -95,7 +135,8 @@ class Queue:
             rows = self._con.execute(
                 """
                 SELECT id, hash, msg_uid, chat_module_id, chat_uid,
-                       original_url, first_seen, attempts, next_try_at
+                       message_text, author_uid, author_name, author_alias,
+                       author_kind, original_url, first_seen, attempts, next_try_at
                 FROM pending
                 WHERE next_try_at <= ?
                 ORDER BY next_try_at ASC
@@ -110,7 +151,8 @@ class Queue:
             rows = self._con.execute(
                 """
                 SELECT id, hash, msg_uid, chat_module_id, chat_uid,
-                       original_url, first_seen, attempts, next_try_at
+                       message_text, author_uid, author_name, author_alias,
+                       author_kind, original_url, first_seen, attempts, next_try_at
                 FROM pending
                 ORDER BY next_try_at ASC
                 """
@@ -125,7 +167,8 @@ class Queue:
             rows = self._con.execute(
                 f"""
                 SELECT id, hash, msg_uid, chat_module_id, chat_uid,
-                       original_url, first_seen, attempts, next_try_at
+                       message_text, author_uid, author_name, author_alias,
+                       author_kind, original_url, first_seen, attempts, next_try_at
                 FROM pending
                 WHERE hash IN ({placeholders})
                 ORDER BY next_try_at ASC

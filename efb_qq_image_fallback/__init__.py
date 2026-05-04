@@ -299,6 +299,10 @@ class QQImageFallbackMiddleware(Middleware):
         server once before falling back to the placeholder.
         """
         original_url = _extract_url_from_text(message.text)
+        original_text = message.text or ""
+        author_uid, author_name, author_alias, author_kind = _author_info(
+            message.author
+        )
 
         if self.cfg.sync_attempt_on_arrival:
             # Synchronous attempt — bounded by sync_timeout. Happens in
@@ -336,6 +340,11 @@ class QQImageFallbackMiddleware(Middleware):
             msg_uid=str(message.uid),
             chat_module_id=str(chat_module_id),
             chat_uid=str(message.chat.uid),
+            message_text=original_text,
+            author_uid=author_uid,
+            author_name=author_name,
+            author_alias=author_alias,
+            author_kind=author_kind,
             original_url=original_url,
             first_try_at=_t.time() + delay,
         )
@@ -372,13 +381,10 @@ class QQImageFallbackMiddleware(Middleware):
 
             edit = Message()
             edit.chat = chat
-            edit.author = chat.self or _synthetic_author(chat)
+            edit.author = _resolve_author(chat, row)
             edit.uid = row.msg_uid
-            edit.type = MsgType.Image
-            edit.file = fresh_file
-            edit.filename = f"{row.hash}.jpg"
-            edit.path = fresh_file.name
-            edit.mime = "image/jpeg"
+            edit.text = row.message_text or ""
+            _attach_image(edit, fresh_file, filename_stem=row.hash)
             edit.edit = True
             edit.edit_media = True
             edit.deliver_to = coordinator.master
@@ -407,10 +413,9 @@ def _is_hash_id(value: str) -> bool:
     return len(value) == 32 and all(c in "0123456789abcdef" for c in value)
 
 
-def _attach_image(message: Message, file) -> None:
+def _attach_image(message: Message, file, filename_stem: str = "qqfallback") -> None:
     """Mutate message in place: text failure → image with the given file."""
     message.type = MsgType.Image
-    message.text = ""
     message.file = file
     message.path = file.name
     try:
@@ -422,7 +427,63 @@ def _attach_image(message: Message, file) -> None:
         mime = "image/png"
     message.mime = mime
     ext = (mime.split("/")[-1] if "/" in mime else "bin")
-    message.filename = f"qqfallback.{ext}"
+    message.filename = f"{filename_stem}.{ext}"
+
+
+def _author_info(author) -> tuple[Optional[str], Optional[str], Optional[str], str]:
+    kind = "member"
+    try:
+        from ehforwarderbot.chat import SelfChatMember, SystemChatMember
+        if isinstance(author, SelfChatMember):
+            kind = "self"
+        elif isinstance(author, SystemChatMember):
+            kind = "system"
+    except Exception:
+        pass
+
+    uid = getattr(author, "uid", None)
+    name = getattr(author, "name", None)
+    alias = getattr(author, "alias", None)
+    return (
+        str(uid) if uid else None,
+        str(name) if name else None,
+        str(alias) if alias else None,
+        kind,
+    )
+
+
+def _resolve_author(chat, row: PendingRow):
+    if row.author_uid:
+        try:
+            return chat.get_member(row.author_uid)
+        except KeyError:
+            pass
+
+        name = row.author_name or row.author_uid
+        alias = row.author_alias or None
+        if row.author_kind == "self":
+            if getattr(chat, "self", None) is not None:
+                return chat.self
+            return chat.add_self()
+        if row.author_kind == "system":
+            return chat.add_system_member(name=name, alias=alias, uid=row.author_uid)
+        return chat.add_member(name=name, alias=alias, uid=row.author_uid)
+
+    return _best_effort_author(chat)
+
+
+def _best_effort_author(chat):
+    try:
+        from ehforwarderbot.chat import SelfChatMember
+        other = getattr(chat, "other", None)
+        if other is not None and not isinstance(other, SelfChatMember):
+            return other
+        for member in getattr(chat, "members", ()):
+            if not isinstance(member, SelfChatMember):
+                return member
+    except Exception:
+        pass
+    return getattr(chat, "self", None) or _synthetic_author(chat)
 
 
 def _synthetic_author(chat):
