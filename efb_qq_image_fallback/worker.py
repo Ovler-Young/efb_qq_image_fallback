@@ -93,6 +93,24 @@ class RetryWorker(threading.Thread):
         finally:
             self._refresh_lock.release()
 
+    def refresh_pending_hashes(self, hashes: list[str]) -> int:
+        """Immediately try pending rows whose hash was reported as uploaded."""
+        if not self._refresh_lock.acquire(blocking=False):
+            log.info("manual refresh skipped because another refresh is running")
+            return 0
+        try:
+            rows = self.queue.pending_by_hashes(hashes)
+            if not rows:
+                return 0
+            log.info(
+                "manual refresh: %d pending entries for %d uploaded ids",
+                len(rows), len(hashes),
+            )
+            self._process_rows(rows, reschedule_misses=False)
+            return len(rows)
+        finally:
+            self._refresh_lock.release()
+
     def _process_rows(
         self, rows: list[PendingRow], reschedule_misses: bool
     ) -> None:

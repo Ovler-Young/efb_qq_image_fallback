@@ -76,13 +76,18 @@ uploading images to the fallback server, call either:
 ```bash
 curl "http://127.0.0.1:8765/refresh"
 curl -X POST "http://127.0.0.1:8765/refresh"
+curl -X POST "http://127.0.0.1:8765/refresh" \
+  -H "Content-Type: application/json" \
+  -d '{"ids":["0123456789abcdef0123456789abcdef"]}'
 ```
 
 The endpoint returns immediately with `accepted` or `already_running`.
-The refresh itself runs in the background and tries every row currently
-in the SQLite pending queue, grouped by hash so each hash is fetched at
-most once in that refresh pass. Scheduled retries still remain as the
-fallback path.
+The refresh itself runs in the background. `GET /refresh` and
+`POST /refresh` with an empty body try every row currently in the
+SQLite pending queue. `POST /refresh` with a JSON `ids` array only tries
+pending rows whose hash matches one of the uploaded IDs. In both cases,
+rows are grouped by hash so each hash is fetched at most once in that
+refresh pass. Scheduled retries still remain as the fallback path.
 
 If `refresh_api_token` is set, pass it as `?token=...`,
 `X-Refresh-Token`, or `Authorization: Bearer ...`.

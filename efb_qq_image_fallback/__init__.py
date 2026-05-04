@@ -166,9 +166,48 @@ class QQImageFallbackMiddleware(Middleware):
                     self._write_json(403, {"ok": False, "error": "forbidden"})
                     return
 
-                accepted = middleware._trigger_manual_refresh()
+                hashes, error = self._refresh_hashes_from_body()
+                if error is not None:
+                    self._write_json(400, {"ok": False, "error": error})
+                    return
+
+                accepted = middleware._trigger_manual_refresh(hashes)
                 status = "accepted" if accepted else "already_running"
-                self._write_json(202, {"ok": True, "status": status})
+                scope = "ids" if hashes is not None else "all"
+                self._write_json(202, {"ok": True, "status": status, "scope": scope})
+
+            def _refresh_hashes_from_body(
+                self,
+            ) -> tuple[Optional[list[str]], Optional[str]]:
+                try:
+                    length = int(self.headers.get("Content-Length", "0") or "0")
+                except ValueError:
+                    return None, "invalid_content_length"
+                if length <= 0:
+                    return None, None
+
+                try:
+                    raw = self.rfile.read(length)
+                    payload = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    return None, "invalid_json"
+
+                ids = payload.get("ids") if isinstance(payload, dict) else payload
+                if not isinstance(ids, list):
+                    return None, "ids_must_be_array"
+
+                hashes: list[str] = []
+                seen: set[str] = set()
+                for item in ids:
+                    if not isinstance(item, str):
+                        return None, "ids_must_be_strings"
+                    hash_ = item.lower()
+                    if not _is_hash_id(hash_):
+                        return None, "invalid_id"
+                    if hash_ not in seen:
+                        hashes.append(hash_)
+                        seen.add(hash_)
+                return hashes, None
 
             def _write_json(self, status: int, body: dict) -> None:
                 data = json.dumps(body).encode("utf-8")
@@ -222,7 +261,7 @@ class QQImageFallbackMiddleware(Middleware):
         bearer = f"Bearer {token}"
         return token in (query_token, header_token) or auth_header == bearer
 
-    def _trigger_manual_refresh(self) -> bool:
+    def _trigger_manual_refresh(self, hashes: Optional[list[str]] = None) -> bool:
         with self._manual_refresh_lock:
             if (
                 self._manual_refresh_thread is not None
@@ -234,17 +273,21 @@ class QQImageFallbackMiddleware(Middleware):
 
             self._manual_refresh_thread = threading.Thread(
                 target=self._run_manual_refresh,
+                args=(hashes,),
                 name="qqimg-fallback-manual-refresh",
                 daemon=True,
             )
             self._manual_refresh_thread.start()
             return True
 
-    def _run_manual_refresh(self) -> None:
+    def _run_manual_refresh(self, hashes: Optional[list[str]]) -> None:
         if self.worker is None:
             return
         try:
-            self.worker.refresh_all_pending()
+            if hashes is None:
+                self.worker.refresh_all_pending()
+            else:
+                self.worker.refresh_pending_hashes(hashes)
         except Exception:
             log.exception("manual refresh failed")
 
@@ -358,6 +401,10 @@ def _extract_url_from_text(text: str) -> Optional[str]:
     import re
     m = re.search(r"https?://\S+", text or "")
     return m.group(0) if m else None
+
+
+def _is_hash_id(value: str) -> bool:
+    return len(value) == 32 and all(c in "0123456789abcdef" for c in value)
 
 
 def _attach_image(message: Message, file) -> None:
