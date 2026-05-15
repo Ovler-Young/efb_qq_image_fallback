@@ -383,7 +383,7 @@ class QQImageFallbackMiddleware(Middleware):
             edit.chat = chat
             edit.author = _resolve_author(chat, row)
             edit.uid = row.msg_uid
-            edit.text = row.message_text or ""
+            edit.text = ""
             _attach_image(edit, fresh_file, filename_stem=row.hash)
             edit.edit = True
             edit.edit_media = True
